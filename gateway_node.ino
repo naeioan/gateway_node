@@ -48,15 +48,15 @@ void setup(void)
 {
   while (!Serial);  // required for Flora & Micro
   delay(500);
-  Serial.begin(115200);
+  Serial.begin(4800);
 
   // Initialise the IO and ISR for the RF receiver
   vw_set_rx_pin(RXPIN);
   vw_set_ptt_inverted(true); // Required for DR3100
-  vw_setup(2000);   // Bits per sec
+  vw_setup(100);   // Bits per sec
   vw_rx_start();       // Start the receiver PLL running
     
-  //setupADC();
+  setupADC();
   //configure ble interrupt
   //pinMode(interruptPin, INPUT_PULLUP);
   //digitalPinToInterrupt(interruptPin)
@@ -158,28 +158,27 @@ int getTemp(){
   return temperature - 273 + TEMP_OFFSET;
 }
 
-char* rcvValues(){
+int rcvValues(uint8_t buf[], uint8_t buflen,uint8_t * values){
   
-    uint8_t buf[VW_MAX_MESSAGE_LEN];
-    uint8_t buflen = VW_MAX_MESSAGE_LEN;
-    char retbuf[VW_MAX_MESSAGE_LEN];
-    Serial.println("get ota message");
+    Serial.println(">>get ota readings...");
     if (vw_get_message(buf, &buflen)) // Non-blocking
     {
       int i;
 
         digitalWrite(13, true); // Flash a light to show received good message
+        
       // Message with a good checksum received, dump it.
       for (i = 0; i < buflen; i++)
     {
       Serial.print(char(buf[i]));
-      retbuf[i] = (char)buf[i];
+      values[i] = (char)buf[i];
     }
         Serial.println("");
         digitalWrite(13, false);
-        return retbuf;
+        return 0;
     }
-  Serial.println("no msg received");
+  Serial.println("#no readings received");
+  return 1;
   }
 
 
@@ -187,16 +186,25 @@ char* rcvValues(){
 
 void loop()
 { 
-    //while (ble.available()) {
-    //    Serial.println("ble rx triggered");
-    //    int c = ble.read();
-    //    Serial.println(c);
-    //    if(c == 'r'){
-     //   Serial.println(">>Request received, sending data...");
-        uint8_t txt[BUFSIZE+1];
-      rcvValues();
-      /*
-      Serial.println("Recording sensor values...\n");
+    uint8_t inputKey[] = {0x00, 0x01, 0x02, 0x03, 0x08, 0x09, 0x0a, 0x0b, 0x10, 0x11, 0x12, 0x13, 0x18, 0x19, 0x1a, 0x1b};
+    char msg_enc_snd[BUFSIZE+1];
+    uint8_t keys[SIMON_BLOCK_SIZE/16*SIMON_ROUNDS];
+    uint8_t plainText[BUFSIZE+1];
+    
+    uint8_t txt[BUFSIZE+1];
+    uint8_t buf[VW_MAX_MESSAGE_LEN];
+    uint8_t buflen = VW_MAX_MESSAGE_LEN;
+
+    uint8_t values[BUFSIZE+1];
+    int ret;
+    
+    if( !(ret=rcvValues(buf,buflen,values)) ){
+      
+          encryptKeySchedule(inputKey, keys);
+          decrypt(values,keys);
+    }
+    
+        Serial.println("Recording sensor values...");
         //cpu temp
         txt[0] = (uint8_t)(getTemp());
         Serial.print("Cpu temp = ");
@@ -205,29 +213,48 @@ void loop()
         txt[1] = (uint8_t)(random(70,90));
         Serial.print("Water pressure = ");
         Serial.println(txt[1]);
-        //room temp
-        for(int i = 0; i < 6; i++){
-        txt[i+2] = (uint8_t)(random(20,30));
-        Serial.print("Room ");
-        Serial.print(i+1);
-        Serial.print(" temp = ");
-        Serial.println(txt[i+2]);
+        
+        if(!ret){
+              //temp from sensor DHT22
+              txt[2] = values[0];
+              Serial.print("DHT22 temp = ");
+              Serial.println(txt[2]);
+              //humidity from sensor DHT22
+              txt[3] = values[1];
+              Serial.print("DHT22 humidity = ");
+              Serial.println(txt[3]);
         }
+        else{
+              // no readings, generate random
+              txt[2]=(uint8_t)(random(20,30));
+              Serial.print("DHT22_gen temp = ");
+              Serial.println(txt[2]);
+          
+              txt[3]=(uint8_t)(random(40,50));
+              Serial.print("DHT22_gen humidity  = ");
+              Serial.println(txt[3]);
+          }
+        //room temp
+        
+        for(int i = 4; i < 7; i++){
+        txt[i] = (uint8_t)(random(20,30));
+        Serial.print("Room ");
+        Serial.print(i-3);
+        Serial.print(" temp = ");
+        Serial.println(txt[i]);
+        }
+        //fan speed
+        Serial.print("Fan Speed = ");
+        txt[7]=(uint8_t)(random(60,70));
+        Serial.println(txt[7]*100);
+        
   // encrypt
-
-    char msg_enc_snd[BUFSIZE+1];
-    
-    uint8_t inputKey[] = {0x00, 0x01, 0x02, 0x03, 0x08, 0x09, 0x0a, 0x0b, 0x10, 0x11, 0x12, 0x13, 0x18, 0x19, 0x1a, 0x1b};
-    
-    uint8_t keys[SIMON_BLOCK_SIZE/16*SIMON_ROUNDS];
-    uint8_t plainText[BUFSIZE+1];
     
     for(int i = 0 ; i < 8 ; i++ ){
       plainText[i] = (uint8_t)txt[i];
       }
       
     encryptKeySchedule(inputKey, keys);
-    
     printArr(plainText,"PlainText: ");
     
     encrypt(plainText, keys);
@@ -236,13 +263,12 @@ void loop()
   for(int i = 0;i < 8 ;i++){
     msg_enc_snd[i] = char(plainText[i]);
     Serial.print(char(plainText[i]));
-    } 
+    }
+    Serial.println(""); 
   
   // send over ble
   ble.print(msg_enc_snd);
-    //}
-  //}
-  */
+  
   delay(1000);
 }
 
